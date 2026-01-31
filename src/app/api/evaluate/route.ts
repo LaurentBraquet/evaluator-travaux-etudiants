@@ -22,7 +22,11 @@ async function extractTextFromPDF(filePath: string): Promise<string> {
 
     // Dynamic import to avoid build-time issues
     const pdfjsLib = await import('pdfjs-dist')
-    console.log('PDF.js loaded successfully')
+
+    // Disable worker completely - use main thread only
+    pdfjsLib.GlobalWorkerOptions.workerSrc = ''
+
+    console.log('PDF.js loaded successfully (worker disabled)')
 
     // Configure for Node.js environment without worker
     const dataBuffer = await readFile(filePath)
@@ -30,7 +34,7 @@ async function extractTextFromPDF(filePath: string): Promise<string> {
     const uint8Array = new Uint8Array(dataBuffer)
     console.log('File buffer size:', dataBuffer.length, 'bytes')
 
-    // Load PDF document
+    // Load PDF document (without worker)
     const loadingTask = pdfjsLib.getDocument({
       data: uint8Array,
       useSystemFonts: true,
