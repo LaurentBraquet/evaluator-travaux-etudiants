@@ -5,7 +5,8 @@ import path from 'path'
 import mammoth from 'mammoth'
 import ZAI from 'z-ai-web-dev-sdk'
 
-const UPLOAD_DIR = path.join(process.cwd(), 'uploads')
+// Use /tmp for Vercel compatibility (only writable directory)
+const UPLOAD_DIR = '/tmp/uploads'
 
 // Ensure upload directory exists
 async function ensureUploadDir() {
