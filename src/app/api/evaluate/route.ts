@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { writeFile, unlink, mkdir } from 'fs/promises'
-import { existsSync, readFileSync } from 'fs'
+import { writeFile, unlink, mkdir, readFile } from 'fs/promises'
+import { existsSync } from 'fs'
 import path from 'path'
-import ZAI from 'z-ai-web-dev-sdk'
+import * as pdfjsLib from 'pdfjs-dist'
 import mammoth from 'mammoth'
-
-// Import pdf-parse using require (it doesn't have a proper ESM default export)
-const pdfParse = require('pdf-parse')
+import ZAI from 'z-ai-web-dev-sdk'
 
 const UPLOAD_DIR = path.join(process.cwd(), 'uploads')
+
+// Configure pdf.js worker for server environment
+pdfjsLib.GlobalWorkerOptions.workerSrc = '' // Disable worker, use synchronous mode
 
 // Ensure upload directory exists
 async function ensureUploadDir() {
@@ -17,33 +18,44 @@ async function ensureUploadDir() {
   }
 }
 
-// Extract text from PDF using pdf-parse (Node.js library)
+// Extract text from PDF using pdfjs-dist (Node.js compatible library)
 async function extractTextFromPDF(filePath: string): Promise<string> {
   try {
-    const dataBuffer = readFileSync(filePath)
-    const data = await pdfParse(dataBuffer)
-    return data.text
+    const dataBuffer = await readFile(filePath)
+    const loadingTask = pdfjsLib.getDocument({
+      data: new Uint8Array(dataBuffer),
+      useWorkerFetch: false,
+      isEvalSupported: false,
+      useSystemFonts: true,
+    })
+
+    const pdf = await loadingTask.promise
+    let fullText = ''
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i)
+      const textContent = await page.getTextContent()
+
+      const pageText = textContent.items
+        .map((item: any) => item.str)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+
+      fullText += pageText + '\n'
+    }
+
+    return fullText.trim()
   } catch (error) {
     console.error('Error extracting text from PDF:', error)
     throw new Error('Erreur lors de l\'extraction du texte du PDF')
   }
 }
 
-// Helper function to read file as Buffer
-function readFileAsync(filePath: string): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const fs = require('fs')
-    fs.readFile(filePath, (err: any, data: Buffer) => {
-      if (err) reject(err)
-      else resolve(data)
-    })
-  })
-}
-
 // Extract text from DOCX using mammoth (Node.js library)
 async function extractTextFromDOCX(filePath: string): Promise<string> {
   try {
-    const dataBuffer = await readFileAsync(filePath)
+    const dataBuffer = await readFile(filePath)
     const result = await mammoth.extractRawText({ buffer: dataBuffer })
     return result.value
   } catch (error) {
