@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { writeFile, unlink, mkdir } from 'fs/promises'
-import { existsSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import path from 'path'
 import ZAI from 'z-ai-web-dev-sdk'
-import pdfParse from 'pdf-parse'
 import mammoth from 'mammoth'
+
+// Import pdf-parse using require (it doesn't have a proper ESM default export)
+const pdfParse = require('pdf-parse')
 
 const UPLOAD_DIR = path.join(process.cwd(), 'uploads')
 
@@ -18,7 +20,7 @@ async function ensureUploadDir() {
 // Extract text from PDF using pdf-parse (Node.js library)
 async function extractTextFromPDF(filePath: string): Promise<string> {
   try {
-    const dataBuffer = await readFileAsync(filePath)
+    const dataBuffer = readFileSync(filePath)
     const data = await pdfParse(dataBuffer)
     return data.text
   } catch (error) {
