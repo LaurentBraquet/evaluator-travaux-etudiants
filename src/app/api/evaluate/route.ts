@@ -18,11 +18,15 @@ async function ensureUploadDir() {
 // Extract text from PDF using a simple approach
 async function extractTextFromPDF(filePath: string): Promise<string> {
   try {
+    console.log('Starting PDF extraction from:', filePath)
+
     // Dynamic import to avoid build-time issues
     const pdfjsLib = await import('pdfjs-dist')
+    console.log('PDF.js loaded successfully')
 
     // Configure for Node.js environment without worker
     const dataBuffer = await readFile(filePath)
+    console.log('File buffer size:', dataBuffer.length, 'bytes')
 
     // Load PDF document
     const loadingTask = pdfjsLib.getDocument({
@@ -34,6 +38,8 @@ async function extractTextFromPDF(filePath: string): Promise<string> {
     })
 
     const pdf = await loadingTask.promise
+    console.log('PDF loaded, number of pages:', pdf.numPages)
+
     let fullText = ''
 
     // Extract text from each page
@@ -53,22 +59,33 @@ async function extractTextFromPDF(filePath: string): Promise<string> {
       }
     }
 
+    console.log('PDF extraction completed, text length:', fullText.length)
     return fullText.trim()
   } catch (error) {
     console.error('Error extracting text from PDF:', error)
-    throw new Error('Erreur lors de l\'extraction du texte du PDF')
+    throw new Error(`Erreur lors de l'extraction du texte du PDF: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
   }
 }
 
 // Extract text from DOCX using mammoth (Node.js library)
 async function extractTextFromDOCX(filePath: string): Promise<string> {
   try {
+    console.log('Starting DOCX extraction from:', filePath)
+
     const dataBuffer = await readFile(filePath)
+    console.log('DOCX buffer size:', dataBuffer.length, 'bytes')
+
     const result = await mammoth.extractRawText({ buffer: dataBuffer })
+    console.log('DOCX extraction completed, text length:', result.value.length, 'warnings:', result.messages.length)
+
+    if (result.messages.length > 0) {
+      console.log('Mammoth warnings:', result.messages)
+    }
+
     return result.value
   } catch (error) {
     console.error('Error extracting text from DOCX:', error)
-    throw new Error('Erreur lors de l\'extraction du texte du DOCX')
+    throw new Error(`Erreur lors de l'extraction du texte du DOCX: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
   }
 }
 
@@ -205,10 +222,13 @@ export async function POST(req: NextRequest) {
     try {
       // Extract text from file
       const fileType = fileName.split('.').pop()?.toLowerCase() || ''
+      console.log('File type:', fileType, 'File name:', fileName)
+
       const studentWork = await extractText(filePath, fileType)
+      console.log('Extracted text preview (first 200 chars):', studentWork.substring(0, 200))
 
       if (!studentWork || studentWork.trim().length < 10) {
-        throw new Error('Impossible d\'extraire le texte du fichier. Vérifiez que le fichier contient du texte extractible.')
+        throw new Error(`Texte extrait trop court (${studentWork?.length || 0} caractères). Vérifiez que le fichier contient du texte extractible.`)
       }
 
       // Evaluate using LLM
