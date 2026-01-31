@@ -2,14 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { writeFile, unlink, mkdir, readFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import path from 'path'
-import * as pdfjsLib from 'pdfjs-dist'
 import mammoth from 'mammoth'
 import ZAI from 'z-ai-web-dev-sdk'
 
 const UPLOAD_DIR = path.join(process.cwd(), 'uploads')
-
-// Configure pdf.js worker for server environment
-pdfjsLib.GlobalWorkerOptions.workerSrc = '' // Disable worker, use synchronous mode
 
 // Ensure upload directory exists
 async function ensureUploadDir() {
@@ -18,31 +14,42 @@ async function ensureUploadDir() {
   }
 }
 
-// Extract text from PDF using pdfjs-dist (Node.js compatible library)
+// Extract text from PDF using a simple approach
 async function extractTextFromPDF(filePath: string): Promise<string> {
   try {
+    // Dynamic import to avoid build-time issues
+    const pdfjsLib = await import('pdfjs-dist')
+
+    // Configure for Node.js environment without worker
     const dataBuffer = await readFile(filePath)
+
+    // Load PDF document
     const loadingTask = pdfjsLib.getDocument({
-      data: new Uint8Array(dataBuffer),
+      data: dataBuffer,
+      useSystemFonts: true,
       useWorkerFetch: false,
       isEvalSupported: false,
-      useSystemFonts: true,
+      disableFontFace: true,
     })
 
     const pdf = await loadingTask.promise
     let fullText = ''
 
+    // Extract text from each page
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i)
       const textContent = await page.getTextContent()
 
       const pageText = textContent.items
         .map((item: any) => item.str)
+        .filter((str: string) => str.trim().length > 0)
         .join(' ')
         .replace(/\s+/g, ' ')
         .trim()
 
-      fullText += pageText + '\n'
+      if (pageText) {
+        fullText += pageText + '\n'
+      }
     }
 
     return fullText.trim()
@@ -75,7 +82,7 @@ async function extractText(filePath: string, fileType: string): Promise<string> 
   }
 }
 
-// Evaluate the student work using LLM
+// Evaluate student work using LLM
 async function evaluateWork(
   assignmentTitle: string,
   subject: string,
