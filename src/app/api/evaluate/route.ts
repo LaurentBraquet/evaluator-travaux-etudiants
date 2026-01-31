@@ -5,7 +5,6 @@ import path from 'path'
 import mammoth from 'mammoth'
 import ZAI from 'z-ai-web-dev-sdk'
 
-// Use /tmp for Vercel compatibility (only writable directory)
 const UPLOAD_DIR = '/tmp/uploads'
 
 // Ensure upload directory exists
@@ -15,65 +14,45 @@ async function ensureUploadDir() {
   }
 }
 
-// Extract text from PDF using a simple approach
+// Initialize ZAI with default configuration (no external config file needed)
+async function initZAI() {
+  // Create ZAI instance - it will use default configuration
+  return await ZAI.create()
+}
+
+// Extract text from PDF using pdf-parse
 async function extractTextFromPDF(filePath: string): Promise<string> {
   try {
     console.log('Starting PDF extraction from:', filePath)
 
-    // Dynamic import to avoid build-time issues
-    const pdfjsLib = await import('pdfjs-dist')
-
-    // Disable worker completely - use main thread only
-    pdfjsLib.GlobalWorkerOptions.workerSrc = ''
-
-    console.log('PDF.js loaded successfully (worker disabled)')
-
-    // Configure for Node.js environment without worker
-    const dataBuffer = await readFile(filePath)
-    // Convert Buffer to Uint8Array as required by pdfjs-dist
-    const uint8Array = new Uint8Array(dataBuffer)
-    console.log('File buffer size:', dataBuffer.length, 'bytes')
-
-    // Load PDF document (without worker)
-    const loadingTask = pdfjsLib.getDocument({
-      data: uint8Array,
-      useSystemFonts: true,
-      useWorkerFetch: false,
-      isEvalSupported: false,
-      disableFontFace: true,
-    })
-
-    const pdf = await loadingTask.promise
-    console.log('PDF loaded, number of pages:', pdf.numPages)
-
-    let fullText = ''
-
-    // Extract text from each page
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i)
-      const textContent = await page.getTextContent()
-
-      const pageText = textContent.items
-        .map((item: any) => item.str)
-        .filter((str: string) => str.trim().length > 0)
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-
-      if (pageText) {
-        fullText += pageText + '\n'
+    // Polyfill DOMMatrix for pdf-parse in Node.js environment
+    if (typeof (global as any).DOMMatrix === 'undefined') {
+      (global as any).DOMMatrix = class DOMMatrix {
+        constructor() {}
+        multiply() { return this; }
+        translate() { return this; }
+        scale() { return this; }
+        rotate() { return this; }
       }
     }
 
-    console.log('PDF extraction completed, text length:', fullText.length)
-    return fullText.trim()
+    // Use require for pdf-parse to avoid ESM issues
+    const pdfParse = require('pdf-parse')
+    const dataBuffer = await readFile(filePath)
+    console.log('File buffer size:', dataBuffer.length, 'bytes')
+
+    // Parse PDF
+    const data = await pdfParse(dataBuffer)
+
+    console.log('PDF extraction completed, number of pages:', data.numpages, 'text length:', data.text.length)
+    return data.text.trim()
   } catch (error) {
     console.error('Error extracting text from PDF:', error)
     throw new Error(`Erreur lors de l'extraction du texte du PDF: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
   }
 }
 
-// Extract text from DOCX using mammoth (Node.js library)
+// Extract text from DOCX using mammoth
 async function extractTextFromDOCX(filePath: string): Promise<string> {
   try {
     console.log('Starting DOCX extraction from:', filePath)
@@ -114,7 +93,7 @@ async function evaluateWork(
   criteria: string,
   studentWork: string
 ): Promise<any> {
-  const zai = await ZAI.create()
+  const zai = await initZAI()
 
   const systemPrompt = `Tu es un enseignant expert et impartial. Ton rôle est d'évaluer des travaux d'étudiants de manière constructive et détaillée.
 
@@ -186,7 +165,7 @@ ${studentWork}
     }
   } catch (error) {
     console.error('Error evaluating work:', error)
-    throw new Error('Erreur lors de l\'évaluation par l\'IA')
+    throw new Error(`Erreur lors de l'évaluation par l'IA: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
   }
 }
 
