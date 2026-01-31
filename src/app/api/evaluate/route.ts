@@ -26,11 +26,13 @@ async function extractTextFromPDF(filePath: string): Promise<string> {
 
     // Configure for Node.js environment without worker
     const dataBuffer = await readFile(filePath)
+    // Convert Buffer to Uint8Array as required by pdfjs-dist
+    const uint8Array = new Uint8Array(dataBuffer)
     console.log('File buffer size:', dataBuffer.length, 'bytes')
 
     // Load PDF document
     const loadingTask = pdfjsLib.getDocument({
-      data: dataBuffer,
+      data: uint8Array,
       useSystemFonts: true,
       useWorkerFetch: false,
       isEvalSupported: false,
