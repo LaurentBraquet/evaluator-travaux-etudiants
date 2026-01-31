@@ -14,10 +14,13 @@ async function ensureUploadDir() {
   }
 }
 
-// Initialize ZAI with default configuration (no external config file needed)
+// Initialize ZAI with inline configuration (no external config file needed)
 async function initZAI() {
-  // Create ZAI instance - it will use default configuration
-  return await ZAI.create()
+  // Create ZAI instance with configuration directly passed
+  return await ZAI.create({
+    apiKey: process.env.ZAI_API_KEY || '',
+    apiEndpoint: process.env.ZAI_API_ENDPOINT || 'https://api.z-ai.com'
+  } as any)
 }
 
 // Extract text from PDF using pdf-parse

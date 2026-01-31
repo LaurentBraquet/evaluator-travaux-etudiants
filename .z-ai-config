@@ -1,5 +1,4 @@
 {
   "apiEndpoint": "https://api.z-ai.com",
-  "apiKey": "",
-  "model": "default"
+  "apiKey": ""
 }
