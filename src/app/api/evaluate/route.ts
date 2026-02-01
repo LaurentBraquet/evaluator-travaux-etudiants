@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import { writeFile, unlink, mkdir, readFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import path from 'path'
@@ -6,13 +6,12 @@ import mammoth from 'mammoth'
 
 const UPLOAD_DIR = '/tmp/uploads'
 
-// --- CLIENT PERSONNALISÉ (CORRIGÉ) ---
+// --- CLIENT Z-AI CORRIGÉ (Retour vers l'URL Z-AI) ---
 class ZAIClient {
   constructor(config) {
     this.apiKey = config.apiKey;
-    // URL par défaut corrigée vers OpenAI si Z-AI n'est pas utilisé, 
-    // ou configurable via la variable Z_AI_API_ENDPOINT
-    this.apiEndpoint = config.apiEndpoint || 'https://api.openai.com/v1'; 
+    // CORRECTION ICI : On pointe par défaut sur Z-AI, pas OpenAI
+    this.apiEndpoint = config.apiEndpoint || 'https://api.z-ai.com/v1'; 
     
     this.chat = {
       completions: {
@@ -23,16 +22,18 @@ class ZAIClient {
 
   async createCompletion(params) {
     if (!this.apiKey) {
-      throw new Error("Clé API manquante. Ajoutez Z_AI_API_KEY dans Vercel.");
+      throw new Error("Clé API manquante. Vérifiez Z_AI_API_KEY.");
     }
 
-    // Construction correcte de l'URL
-    // Si l'endpoint finit déjà par /v1 ou /chat/completions, on ne l'ajoute pas deux fois
+    // Construction de l'URL
     let url = this.apiEndpoint;
+    
+    // Logique pour s'assurer qu'on tape sur le bon endpoint de chat
     if (!url.endsWith('/chat/completions')) {
-        // Nettoyage des slashs finaux potentiels
+        // Enlève le slash final s'il existe
         url = url.replace(/\/+$/, '');
-        // Si l'URL de base est juste le domaine, on ajoute le chemin standard
+        // Si l'URL ne contient pas v1, on suppose qu'il faut l'ajouter (standard OpenAI)
+        // Mais pour Z-AI, souvent c'est direct. On assure la structure standard :
         if (!url.includes('/v1')) {
             url += '/v1/chat/completions';
         } else {
@@ -40,7 +41,7 @@ class ZAIClient {
         }
     }
 
-    console.log(`Tentative de connexion à: ${url}`);
+    console.log(`Connexion en cours vers : ${url}`); // Tu verras 'api.z-ai.com' dans les logs
 
     try {
       const response = await fetch(url, {
@@ -59,42 +60,31 @@ class ZAIClient {
 
       return await response.json();
     } catch (error) {
-      // Gestion spécifique des erreurs réseau (DNS, SSL, etc.)
-      if (error.cause && error.cause.code === 'ERR_SSL_TLSV1_UNRECOGNIZED_NAME') {
-         throw new Error(`L'URL de l'API est invalide (${url}). Vérifiez la variable Z_AI_API_ENDPOINT.`);
-      }
+      console.error("Erreur Fetch:", error);
       throw error;
     }
   }
 
   static async create(config) {
+    // On priorise les variables d'environnement Z_AI
     const finalConfig = config || {
       apiKey: process.env.Z_AI_API_KEY || '',
-      apiEndpoint: process.env.Z_AI_API_ENDPOINT || 'https://api.openai.com/v1' 
+      apiEndpoint: process.env.Z_AI_API_ENDPOINT || 'https://api.z-ai.com/v1'
     };
     return new ZAIClient(finalConfig);
   }
 }
 
-// Ensure upload directory exists
+// --- UTILITAIRES FICHIERS ---
+
 async function ensureUploadDir() {
   if (!existsSync(UPLOAD_DIR)) {
     await mkdir(UPLOAD_DIR, { recursive: true })
   }
 }
 
-// Initialize ZAI
-async function initZAI() {
-  return ZAIClient.create({
-    apiEndpoint: process.env.Z_AI_API_ENDPOINT, // Laissera la valeur par défaut si vide
-    apiKey: process.env.Z_AI_API_KEY 
-  });
-}
-
-// ... (Gardez vos fonctions extractTextFromPDF, extractTextFromDOCX, extractText ici à l'identique) ...
-// Pour la brièveté, je ne les répète pas mais elles sont indispensables !
 async function extractTextFromPDF(filePath) {
-    // ... VOS FONCTIONS D'EXTRACTION RESTENT ICI ...
+    // Polyfill pour pdf-parse dans Next.js (souvent nécessaire)
     if (typeof global.DOMMatrix === 'undefined') {
         global.DOMMatrix = class DOMMatrix { constructor() {}; multiply() {return this}; translate() {return this}; scale() {return this}; rotate() {return this} }
     }
@@ -111,46 +101,85 @@ async function extractTextFromDOCX(filePath) {
 async function extractText(filePath, fileType) {
     if (fileType === 'pdf') return extractTextFromPDF(filePath);
     if (fileType === 'docx') return extractTextFromDOCX(filePath);
-    throw new Error('Type non supporté');
+    throw new Error('Type de fichier non supporté (PDF ou DOCX uniquement)');
 }
 
-// Evaluate student work
+// --- LOGIQUE D'ÉVALUATION ---
+
+async function initZAI() {
+  // Utilisation explicite des variables d'environnement
+  return ZAIClient.create({
+    apiKey: process.env.Z_AI_API_KEY,
+    apiEndpoint: process.env.Z_AI_API_ENDPOINT || 'https://api.z-ai.com/v1' 
+  });
+}
+
 async function evaluateWork(assignmentTitle, subject, instructions, criteria, studentWork) {
   const zai = await initZAI()
+  
+  const systemPrompt = `Tu es un enseignant expert chargé d'évaluer des devoirs d'étudiants.
+  Ton but est de fournir une correction constructive, bienveillante mais rigoureuse.
+  
+  Format de réponse attendu (JSON uniquement) :
+  {
+    "score": "Note sur 20 (ex: 14/20)",
+    "feedback": "Commentaire général encourageant",
+    "strengths": ["Point fort 1", "Point fort 2"],
+    "weaknesses": ["Point faible 1", "Point faible 2"],
+    "detailed_corrections": [
+      { "original": "Texte fautif cité", "correction": "Suggestion de correction", "explanation": "Pourquoi c'est faux" }
+    ]
+  }`
 
-  const systemPrompt = `Tu es un enseignant expert... (votre prompt système complet)` // Assurez-vous de remettre tout le texte
-  const userPrompt = `Évalue le travail suivant:\nTITRE: ${assignmentTitle}\nMATIÈRE: ${subject}\nCONSIGNES: ${instructions}\nCRITÈRES: ${criteria}\nTRAVAIL: ${studentWork}\nRéponds UNIQUEMENT en JSON.`
+  const userPrompt = `Évalue le travail suivant :
+  
+  TITRE: ${assignmentTitle}
+  MATIÈRE: ${subject}
+  CONSIGNES: ${instructions}
+  CRITÈRES: ${criteria}
+  
+  TRAVAIL DE L'ÉTUDIANT :
+  ${studentWork}
+  
+  Réponds UNIQUEMENT en JSON valide sans Markdown.`
 
   try {
     const completion = await zai.chat.completions.create({
-      // IMPORTANT: Le modèle doit être spécifié si vous utilisez OpenAI ou compatible
+      // IMPORTANT : Si Z-AI utilise ses propres noms de modèles, remplace "gpt-4-turbo" par le modèle par défaut de Z-AI.
+      // Souvent "gpt-4" fonctionne comme alias.
       model: "gpt-4-turbo-preview", 
       messages: [
         { role: 'assistant', content: systemPrompt },
         { role: 'user', content: userPrompt }
       ],
-      // 'thinking' est spécifique à certains modèles, à retirer pour OpenAI standard
-      // thinking: { type: 'disabled' } 
+      temperature: 0.7
     })
-    
+
     const response = completion.choices[0]?.message?.content
     if (!response) throw new Error('Pas de réponse du LLM')
 
-    let jsonMatch = response.match(/\{[\s\S]*\}/)
-    if (jsonMatch) return JSON.parse(jsonMatch[0])
-    throw new Error('Réponse invalide du LLM')
+    // Nettoyage du JSON (au cas où le LLM ajoute des ```json ...)
+    let jsonString = response;
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+        jsonString = jsonMatch[0];
+    }
+
+    return JSON.parse(jsonString);
 
   } catch (error) {
-    console.error('Error evaluating work:', error)
+    console.error('Erreur lors de l\'évaluation:', error)
     throw new Error(`Erreur IA: ${error.message}`)
   }
 }
+
+// --- ROUTE HANDLER (POST) ---
 
 export async function POST(req) {
   try {
     await ensureUploadDir()
     const formData = await req.formData()
-    // ... (Reste de la logique de récupération des fichiers identique) ...
+    
     const file = formData.get('file');
     const assignmentTitle = formData.get('assignmentTitle');
     const subject = formData.get('subject');
@@ -170,14 +199,16 @@ export async function POST(req) {
       const fileType = fileName.split('.').pop()?.toLowerCase() || ''
       const studentWork = await extractText(filePath, fileType)
       
-      if (!studentWork || studentWork.length < 10) throw new Error("Texte insuffisant")
+      if (!studentWork || studentWork.length < 10) throw new Error("Le fichier semble vide ou illisible.")
 
       const result = await evaluateWork(assignmentTitle, subject, instructions, criteria, studentWork)
       return NextResponse.json(result)
 
     } finally {
+      // Nettoyage du fichier temporaire
       await unlink(filePath).catch(console.error)
     }
+
   } catch (error) {
     console.error('API Error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
