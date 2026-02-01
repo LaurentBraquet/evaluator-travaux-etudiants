@@ -6,17 +6,16 @@ import mammoth from 'mammoth'
 
 const UPLOAD_DIR = '/tmp/uploads'
 
-// --- CLIENT Z-AI CORRIGÉ ---
+// --- CLIENT Z.AI ---
 class ZAIClient {
   constructor(config) {
     this.apiKey = config.apiKey;
-    // CORRECTION MAJEURE ICI : Changement du domaine z-ai.com -> z.ai
-    this.apiEndpoint = config.apiEndpoint || 'https://api.z.ai/v1'; 
-    
+    this.baseUrl = config.baseUrl || 'https://api.z.ai';
+
     this.chat = {
       completions: {
-        create: this.createCompletion.bind(this)
-      }
+        create: this.createCompletion.bind(this),
+      },
     };
   }
 
@@ -25,19 +24,7 @@ class ZAIClient {
       throw new Error("Clé API manquante. Vérifiez Z_AI_API_KEY.");
     }
 
-    let url = this.apiEndpoint;
-    
-    // Nettoyage et construction de l'URL
-    if (!url.endsWith('/chat/completions')) {
-        url = url.replace(/\/+$/, '');
-        // Gestion souple : si l'URL fournie est juste le domaine, on ajoute le chemin
-        if (!url.includes('/v1')) {
-            url += '/v1/chat/completions';
-        } else {
-            url += '/chat/completions';
-        }
-    }
-
+    const url = this.baseUrl.replace(/\/+$/, '') + '/chat/completions';
     console.log(`Tentative de connexion à : ${url}`);
 
     try {
@@ -45,9 +32,9 @@ class ZAIClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`
+          'Authorization': `Bearer ${this.apiKey}`,
         },
-        body: JSON.stringify(params)
+        body: JSON.stringify(params),
       });
 
       if (!response.ok) {
@@ -57,25 +44,26 @@ class ZAIClient {
 
       return await response.json();
     } catch (error) {
-      // Si on a encore une erreur de domaine inconnu, on aide l'utilisateur
-      if (error.cause && error.cause.code === 'ERR_SSL_TLSV1_UNRECOGNIZED_NAME') {
-          throw new Error(`Le domaine de l'API est introuvable (${url}). Êtes-vous sûr de l'adresse ?`);
-      }
+      console.error('Erreur Fetch ZAI:', error);
       throw error;
     }
   }
 
   static async create(config) {
-    const finalConfig = config || {
+    const finalConfig = {
       apiKey: process.env.Z_AI_API_KEY || '',
-      // Priorité à la variable d'env, sinon fallback sur z.ai
-      apiEndpoint: process.env.Z_AI_API_ENDPOINT || 'https://api.z.ai/v1'
+      baseUrl: process.env.Z_AI_API_BASE_URL || 'https://api.z.ai',
+      ...(config || {}),
     };
     return new ZAIClient(finalConfig);
   }
 }
 
-// --- UTILITAIRES FICHIERS ---
+async function initZAI() {
+  return ZAIClient.create({});
+}
+
+// --- FONCTIONS D’EXTRACTION (inchangées) ---
 async function ensureUploadDir() {
   if (!existsSync(UPLOAD_DIR)) {
     await mkdir(UPLOAD_DIR, { recursive: true })
@@ -83,95 +71,130 @@ async function ensureUploadDir() {
 }
 
 async function extractTextFromPDF(filePath) {
-    if (typeof global.DOMMatrix === 'undefined') {
-        global.DOMMatrix = class DOMMatrix { constructor() {}; multiply() {return this}; translate() {return this}; scale() {return this}; rotate() {return this} }
+  if (typeof global.DOMMatrix === 'undefined') {
+    global.DOMMatrix = class DOMMatrix {
+      constructor() {}
+      multiply() { return this }
+      translate() { return this }
+      scale() { return this }
+      rotate() { return this }
     }
-    const pdfParse = require('pdf-parse');
-    const dataBuffer = await readFile(filePath);
-    return (await pdfParse(dataBuffer)).text.trim();
+  }
+  const pdfParse = require('pdf-parse');
+  const dataBuffer = await readFile(filePath);
+  return (await pdfParse(dataBuffer)).text.trim();
 }
 
 async function extractTextFromDOCX(filePath) {
-    const dataBuffer = await readFile(filePath);
-    return (await mammoth.extractRawText({ buffer: dataBuffer })).value;
+  const dataBuffer = await readFile(filePath);
+  return (await mammoth.extractRawText({ buffer: dataBuffer })).value;
 }
 
 async function extractText(filePath, fileType) {
-    if (fileType === 'pdf') return extractTextFromPDF(filePath);
-    if (fileType === 'docx') return extractTextFromDOCX(filePath);
-    throw new Error('Format non supporté');
+  if (fileType === 'pdf') return extractTextFromPDF(filePath);
+  if (fileType === 'docx') return extractTextFromDOCX(filePath);
+  throw new Error('Type non supporté');
 }
 
-// --- LOGIQUE MÉTIER ---
-
-async function initZAI() {
-  return ZAIClient.create({
-    apiKey: process.env.Z_AI_API_KEY,
-    apiEndpoint: process.env.Z_AI_API_ENDPOINT // Laissera la valeur par défaut (z.ai) si vide
-  });
-}
-
+// --- LOGIQUE D’ÉVALUATION ---
 async function evaluateWork(assignmentTitle, subject, instructions, criteria, studentWork) {
-  const zai = await initZAI()
-  
-  const systemPrompt = `Tu es un enseignant expert... (Remets ton prompt système complet ici)`
-  const userPrompt = `Évalue le travail suivant:\nTITRE: ${assignmentTitle}\nMATIÈRE: ${subject}\nCONSIGNES: ${instructions}\nCRITÈRES: ${criteria}\nTRAVAIL: ${studentWork}\nRéponds UNIQUEMENT en JSON.`
+  const zai = await initZAI();
+
+  const systemPrompt = `Tu es un enseignant expert chargé d'évaluer des devoirs d'étudiants.
+  Ton but est de fournir une correction constructive, bienveillante mais rigoureuse.
+
+  Format de réponse attendu (JSON uniquement) :
+  {
+    "score": "Note sur 20 (ex: 14/20)",
+    "feedback": "Commentaire général encourageant",
+    "strengths": ["Point fort 1", "Point fort 2"],
+    "weaknesses": ["Point faible 1", "Point faible 2"],
+    "detailed_corrections": [
+      { "original": "Texte fautif cité", "correction": "Suggestion de correction", "explanation": "Pourquoi c'est faux" }
+    ]
+  }`
+
+  const userPrompt = `Évalue le travail suivant :
+
+TITRE: ${assignmentTitle}
+MATIÈRE: ${subject}
+CONSIGNES: ${instructions}
+CRITÈRES: ${criteria}
+
+TRAVAIL DE L'ÉTUDIANT :
+${studentWork}
+
+Réponds UNIQUEMENT en JSON valide sans Markdown.`
 
   try {
     const completion = await zai.chat.completions.create({
-      model: "gpt-4-turbo-preview", // Vérifie si Z.AI demande un nom de modèle spécifique
+      model: "gpt-4-turbo-preview", // ou le modèle que Z.AI attend
       messages: [
-        { role: 'assistant', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ]
-    })
-    
-    const response = completion.choices[0]?.message?.content
-    if (!response) throw new Error('Pas de réponse du LLM')
-    
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.7,
+    });
+
+    const response = completion.choices[0]?.message?.content;
+    if (!response) throw new Error('Pas de réponse du LLM');
+
     let jsonString = response;
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (jsonMatch) jsonString = jsonMatch[0];
-    
-    return JSON.parse(jsonString)
+    const match = response.match(/\{[\s\S]*\}/);
+    if (match) jsonString = match[0];
+
+    return JSON.parse(jsonString);
   } catch (error) {
-    console.error('Error evaluating work:', error)
-    throw new Error(`Erreur IA: ${error.message}`)
+    console.error("Erreur lors de l'évaluation:", error);
+    throw new Error(`Erreur IA: ${error.message}`);
   }
 }
 
+// --- ROUTE POST ---
 export async function POST(req) {
   try {
-    await ensureUploadDir()
-    const formData = await req.formData()
-    
+    await ensureUploadDir();
+    const formData = await req.formData();
+
     const file = formData.get('file');
     const assignmentTitle = formData.get('assignmentTitle');
     const subject = formData.get('subject');
     const instructions = formData.get('instructions');
     const criteria = formData.get('criteria');
 
-    if (!file) return NextResponse.json({ error: 'Fichier manquant' }, { status: 400 })
+    if (!file) {
+      return NextResponse.json({ error: 'Fichier manquant' }, { status: 400 });
+    }
 
-    const timestamp = Date.now()
-    const fileName = `${timestamp}-${file.name}`
-    const filePath = path.join(UPLOAD_DIR, fileName)
-    
-    const bytes = await file.arrayBuffer()
-    await writeFile(filePath, Buffer.from(bytes))
+    const timestamp = Date.now();
+    const fileName = `${timestamp}-${file.name}`;
+    const filePath = path.join(UPLOAD_DIR, fileName);
+
+    const bytes = await file.arrayBuffer();
+    await writeFile(filePath, Buffer.from(bytes));
 
     try {
-      const fileType = fileName.split('.').pop()?.toLowerCase() || ''
-      const studentWork = await extractText(filePath, fileType)
-      if (!studentWork || studentWork.length < 10) throw new Error("Texte insuffisant")
-      
-      const result = await evaluateWork(assignmentTitle, subject, instructions, criteria, studentWork)
-      return NextResponse.json(result)
+      const fileType = fileName.split('.').pop()?.toLowerCase() || '';
+      const studentWork = await extractText(filePath, fileType);
+
+      if (!studentWork || studentWork.length < 10) {
+        throw new Error("Le fichier semble vide ou illisible.");
+      }
+
+      const result = await evaluateWork(
+        assignmentTitle,
+        subject,
+        instructions,
+        criteria,
+        studentWork
+      );
+
+      return NextResponse.json(result);
     } finally {
-      await unlink(filePath).catch(console.error)
+      await unlink(filePath).catch(console.error);
     }
   } catch (error) {
-    console.error('API Error:', error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    console.error('API Error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
