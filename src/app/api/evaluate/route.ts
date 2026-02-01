@@ -16,11 +16,53 @@ async function ensureUploadDir() {
 
 // Initialize ZAI with inline configuration (no external config file needed)
 async function initZAI() {
-  // Create ZAI instance with configuration directly passed
-  return await ZAI.create({
-    apiKey: process.env.ZAI_API_KEY || '',
-    apiEndpoint: process.env.ZAI_API_ENDPOINT || 'https://api.z-ai.com'
-  } as any)
+  try {
+    // Try to create config file in multiple locations
+    const fs = require('fs')
+    const path = require('path')
+
+    const configContent = JSON.stringify({
+      apiEndpoint: 'https://api.z-ai.com',
+      apiKey: ''
+    }, null, 2)
+
+    // Try different locations where the SDK might look
+    const configPaths = [
+      '/tmp/.z-ai-config',
+      process.cwd() + '/.z-ai-config',
+      '/etc/.z-ai-config'
+    ]
+
+    for (const configPath of configPaths) {
+      try {
+        if (!fs.existsSync(configPath)) {
+          const dir = path.dirname(configPath)
+          if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true })
+          }
+          fs.writeFileSync(configPath, configContent, 'utf8')
+          console.log('Created config file at:', configPath)
+        }
+      } catch (e) {
+        console.log('Could not create config at', configPath, ':', e.message)
+      }
+    }
+
+    // Try creating ZAI instance
+    return await ZAI.create()
+  } catch (error) {
+    console.error('Error initializing ZAI:', error)
+    // Fallback: try with inline config
+    try {
+      return await ZAI.create({
+        apiKey: process.env.ZAI_API_KEY || '',
+        apiEndpoint: process.env.ZAI_API_ENDPOINT || 'https://api.z-ai.com'
+      } as any)
+    } catch (fallbackError) {
+      console.error('Fallback also failed:', fallbackError)
+      throw fallbackError
+    }
+  }
 }
 
 // Extract text from PDF using pdf-parse
