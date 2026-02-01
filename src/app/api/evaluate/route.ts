@@ -6,21 +6,11 @@ import mammoth from 'mammoth'
 
 const UPLOAD_DIR = '/tmp/uploads'
 
-/**
- * CLIENT Z.AI CONFORME À LA DOC :
- * POST https://api.z.ai/chat/completions
- * Headers:
- *   Content-Type: application/json
- *   Authorization: Bearer VOTRE_CLE_API
- *   X-Z-AI-From: Z
- * Body:
- *   { "messages": [...], "thinking": { "type": "disabled" } }
- */
+// --- CLIENT Z.AI AVEC URL TOTALEMENT CONFIGURABLE ---
 class ZAIClient {
   constructor(config) {
     this.apiKey = config.apiKey
-    this.baseUrl = config.baseUrl || 'https://api.z.ai'
-
+    this.fullUrl = config.fullUrl
     this.chat = {
       completions: {
         create: this.createCompletion.bind(this),
@@ -32,13 +22,12 @@ class ZAIClient {
     if (!this.apiKey) {
       throw new Error('Clé API Z.AI manquante. Vérifiez Z_AI_API_KEY.')
     }
-
-    const url = this.baseUrl.replace(/\/+$/, '') + '/chat/completions'
-    console.log(`Tentative de connexion à : ${url}`)
-
-    const body = {
-      ...params,
+    if (!this.fullUrl) {
+      throw new Error('URL complète de l’API manquante. Vérifiez Z_AI_API_URL.')
     }
+
+    const url = this.fullUrl
+    console.log(`Tentative de connexion à : ${url}`)
 
     const response = await fetch(url, {
       method: 'POST',
@@ -47,7 +36,7 @@ class ZAIClient {
         'Authorization': `Bearer ${this.apiKey}`,
         'X-Z-AI-From': 'Z',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(params),
     })
 
     if (!response.ok) {
@@ -61,7 +50,7 @@ class ZAIClient {
   static async create(config = {}) {
     return new ZAIClient({
       apiKey: process.env.Z_AI_API_KEY || '',
-      baseUrl: process.env.Z_AI_API_BASE_URL || 'https://api.z.ai',
+      fullUrl: process.env.Z_AI_API_URL || '',
       ...config,
     })
   }
@@ -71,9 +60,7 @@ async function initZAI() {
   return ZAIClient.create()
 }
 
-/**
- * Extraction texte des fichiers
- */
+// --- UTILITAIRES FICHIERS (identiques à avant) ---
 async function ensureUploadDir() {
   if (!existsSync(UPLOAD_DIR)) {
     await mkdir(UPLOAD_DIR, { recursive: true })
@@ -81,7 +68,6 @@ async function ensureUploadDir() {
 }
 
 async function extractTextFromPDF(filePath) {
-  // Hack DOMMatrix pour certaines libs PDF côté Node
   if (typeof global.DOMMatrix === 'undefined') {
     global.DOMMatrix = class DOMMatrix {
       constructor() {}
@@ -91,7 +77,6 @@ async function extractTextFromPDF(filePath) {
       rotate() { return this }
     }
   }
-
   const pdfParse = require('pdf-parse')
   const dataBuffer = await readFile(filePath)
   const result = await pdfParse(dataBuffer)
@@ -107,12 +92,10 @@ async function extractTextFromDOCX(filePath) {
 async function extractText(filePath, fileType) {
   if (fileType === 'pdf') return extractTextFromPDF(filePath)
   if (fileType === 'docx') return extractTextFromDOCX(filePath)
-  throw new Error('Type de fichier non supporté (seuls PDF et DOCX sont pris en charge).')
+  throw new Error('Type de fichier non supporté (PDF ou DOCX uniquement).')
 }
 
-/**
- * Appel à Z.AI pour évaluer le devoir
- */
+// --- LOGIQUE D’ÉVALUATION ---
 async function evaluateWork(assignmentTitle, subject, instructions, criteria, studentWork) {
   const zai = await initZAI()
 
@@ -151,21 +134,11 @@ Réponds UNIQUEMENT en JSON valide sans Markdown.`
       thinking: { type: 'disabled' },
     })
 
-    /**
-     * À adapter si besoin selon la vraie structure de réponse Z.AI.
-     * On suppose une compatibilité OpenAI-like :
-     * {
-     *   choices: [
-     *     { message: { content: "..." } }
-     *   ]
-     * }
-     */
     const response = completion.choices?.[0]?.message?.content
     if (!response) {
       throw new Error('Pas de réponse du modèle Z.AI')
     }
 
-    // On isole le JSON dans le texte (au cas où il y aurait du bruit)
     let jsonString = response
     const match = response.match(/\{[\s\S]*\}/)
     if (match) jsonString = match[0]
@@ -177,13 +150,10 @@ Réponds UNIQUEMENT en JSON valide sans Markdown.`
   }
 }
 
-/**
- * Route POST principale
- */
+// --- ROUTE POST ---
 export async function POST(req) {
   try {
     await ensureUploadDir()
-
     const formData = await req.formData()
 
     const file = formData.get('file')
