@@ -20,6 +20,7 @@ async function initZAI() {
     // Try to create config file in multiple locations
     const fs = require('fs')
     const path = require('path')
+    const os = require('os')
 
     const configContent = JSON.stringify({
       apiEndpoint: 'https://api.z-ai.com',
@@ -29,37 +30,46 @@ async function initZAI() {
     // Try different locations where the SDK might look
     const configPaths = [
       '/tmp/.z-ai-config',
-      process.cwd() + '/.z-ai-config',
+      os.homedir() + '/.z-ai-config',  // Home directory
+      process.cwd() + '/.z-ai-config',  // Current working directory
       '/etc/.z-ai-config'
     ]
 
+    console.log('Attempting to create config files...')
     for (const configPath of configPaths) {
       try {
         if (!fs.existsSync(configPath)) {
           const dir = path.dirname(configPath)
-          if (!fs.existsSync(dir)) {
+          if (!fs.existsSync(dir) && dir !== '/' && dir !== process.cwd() && dir !== os.homedir()) {
             fs.mkdirSync(dir, { recursive: true })
           }
           fs.writeFileSync(configPath, configContent, 'utf8')
           console.log('Created config file at:', configPath)
+        } else {
+          console.log('Config already exists at:', configPath)
         }
-      } catch (e) {
+      } catch (e: any) {
         console.log('Could not create config at', configPath, ':', e.message)
       }
     }
 
     // Try creating ZAI instance
+    console.log('Attempting ZAI.create()...')
     return await ZAI.create()
-  } catch (error) {
-    console.error('Error initializing ZAI:', error)
+  } catch (error: any) {
+    console.error('Error initializing ZAI:', error.message)
     // Fallback: try with inline config
     try {
-      return await ZAI.create({
-        apiKey: process.env.ZAI_API_KEY || '',
-        apiEndpoint: process.env.ZAI_API_ENDPOINT || 'https://api.z-ai.com'
-      } as any)
-    } catch (fallbackError) {
-      console.error('Fallback also failed:', fallbackError)
+      console.log('Trying fallback with inline config...')
+      const ZAI = await import('z-ai-web-dev-sdk')
+      const zaiInstance = await (ZAI as any).default.create({
+        apiEndpoint: 'https://api.z-ai.com',
+        apiKey: ''
+      })
+      console.log('Fallback successful!')
+      return zaiInstance
+    } catch (fallbackError: any) {
+      console.error('Fallback also failed:', fallbackError.message)
       throw fallbackError
     }
   }
