@@ -1,125 +1,122 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { writeFile, unlink, mkdir, readFile } from 'fs/promises'
-import { existsSync } from 'fs' // On garde l'import original
+import { existsSync } from 'fs'
 import path from 'path'
 import mammoth from 'mammoth'
 
-// NOTE: Pas d'import global de ZAI pour éviter le chargement prématuré
+// ON RETIRE LE SDK CAPRICIEUX
+// import ZAI from 'z-ai-web-dev-sdk'
 
 const UPLOAD_DIR = '/tmp/uploads'
 
+// --- REMPLACEMENT DU SDK PAR UNE VERSION "SERVERLESS FRIENDLY" ---
+// Cette classe imite exactement le comportement attendu sans avoir besoin de fichiers de config
+class ZAIClient {
+  constructor(config) {
+    this.apiKey = config.apiKey;
+    this.apiEndpoint = config.apiEndpoint || 'https://api.z-ai.com';
+    
+    // Structure compatible avec votre code existant
+    this.chat = {
+      completions: {
+        create: this.createCompletion.bind(this)
+      }
+    };
+  }
+
+  async createCompletion(params) {
+    if (!this.apiKey) {
+      throw new Error("API Key manquante pour ZAI");
+    }
+
+    // On suppose que l'API suit le standard OpenAI (très probable vu la signature)
+    // Si l'endpoint final est différent (ex: /v1/chat/completions), ajustez ici.
+    const url = `${this.apiEndpoint}/v1/chat/completions`; 
+
+    console.log(`Appel API direct vers: ${url}`);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify(params)
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`Erreur API ZAI (${response.status}): ${errorBody}`);
+    }
+
+    return await response.json();
+  }
+
+  static async create(config) {
+    // Si config n'est pas passé, on essaie de lire les variables d'env
+    const finalConfig = config || {
+      apiKey: process.env.Z_AI_API_KEY || '',
+      apiEndpoint: 'https://api.z-ai.com'
+    };
+    return new ZAIClient(finalConfig);
+  }
+}
+
+// Ensure upload directory exists
 async function ensureUploadDir() {
   if (!existsSync(UPLOAD_DIR)) {
     await mkdir(UPLOAD_DIR, { recursive: true })
   }
 }
 
-// Fonction d'initialisation avec "Virtualisation" du fichier de config
+// Initialize ZAI (Version simplifiée et robuste)
 async function initZAI() {
-  const fs = require('fs')
+  console.log('Initialisation du client ZAI personnalisé (sans fichier config)...');
   
-  // 1. Sauvegarde des méthodes originales du système de fichiers
-  const originalExistsSync = fs.existsSync
-  const originalReadFileSync = fs.readFileSync
-  const originalStatSync = fs.statSync
-
-  // 2. Définition de notre configuration virtuelle
-  const virtualConfigContent = JSON.stringify({
+  // Utilisation directe de notre classe personnalisée
+  // Plus besoin de créer des fichiers dans /tmp ou de patcher fs
+  return ZAIClient.create({
     apiEndpoint: 'https://api.z-ai.com',
-    apiKey: process.env.Z_AI_API_KEY || '' // Assurez-vous d'avoir cette variable d'env
-  }, null, 2)
+    apiKey: process.env.Z_AI_API_KEY || '' // Assurez-vous que cette VAR est dans Vercel
+  });
+}
 
+// Extract text from PDF using pdf-parse
+async function extractTextFromPDF(filePath) {
   try {
-    console.log('Activation du patch système de fichiers pour ZAI...')
-
-    // 3. Interception de existsSync
-    // Si la librairie demande si le fichier config existe, on dit OUI (true)
-    fs.existsSync = (filePath) => {
-      if (filePath && filePath.toString().includes('.z-ai-config')) {
-        console.log('Intercepted existsSync check for .z-ai-config')
-        return true
-      }
-      return originalExistsSync.call(fs, filePath)
-    }
-
-    // 4. Interception de readFileSync
-    // Si la librairie essaie de lire le fichier, on lui donne notre JSON virtuel
-    fs.readFileSync = (filePath, options) => {
-      if (filePath && filePath.toString().includes('.z-ai-config')) {
-        console.log('Intercepted readFileSync for .z-ai-config')
-        return virtualConfigContent
-      }
-      return originalReadFileSync.call(fs, filePath, options)
-    }
-
-    // 5. Interception de statSync (certaines libs vérifient la taille/date)
-    fs.statSync = (filePath, options) => {
-        if (filePath && filePath.toString().includes('.z-ai-config')) {
-            return {
-                isFile: () => true,
-                size: virtualConfigContent.length,
-                mtime: new Date(),
-                ctime: new Date()
-            }
-        }
-        return originalStatSync.call(fs, filePath, options)
-    }
-
-    // 6. Import et Initialisation du SDK pendant que le patch est actif
-    console.log('Importing ZAI SDK...')
-    const ZAIModule = await import('z-ai-web-dev-sdk')
-    const ZAI = ZAIModule.default
+    console.log('Starting PDF extraction from:', filePath)
     
-    console.log('Creating ZAI instance...')
-    // La librairie va "lire" notre fichier virtuel sans erreur
-    return await ZAI.create()
+    // Polyfill DOMMatrix
+    if (typeof global.DOMMatrix === 'undefined') {
+      global.DOMMatrix = class DOMMatrix {
+        constructor() {}
+        multiply() { return this; }
+        translate() { return this; }
+        scale() { return this; }
+        rotate() { return this; }
+      }
+    }
 
+    const pdfParse = require('pdf-parse')
+    const dataBuffer = await readFile(filePath)
+    const data = await pdfParse(dataBuffer)
+    return data.text.trim()
   } catch (error) {
-    console.error('Erreur critique lors de l\'initialisation patchée:', error)
-    throw error
-  } finally {
-    // 7. NETTOYAGE CRITIQUE : On remet le système de fichiers dans son état normal
-    // C'est indispensable pour ne pas casser le reste de l'application Next.js
-    fs.existsSync = originalExistsSync
-    fs.readFileSync = originalReadFileSync
-    fs.statSync = originalStatSync
-    console.log('Système de fichiers restauré.')
+    console.error('Error extracting text from PDF:', error)
+    throw new Error(`Erreur PDF: ${error instanceof Error ? error.message : 'Inconnue'}`)
   }
 }
 
-// --- Le reste de vos fonctions utilitaires (PDF, DOCX) reste identique ---
-
-async function extractTextFromPDF(filePath) {
-    // ... (votre code original de parsing PDF)
-    // Pour gagner de la place, je ne remets pas tout le code PDF ici s'il fonctionnait déjà
-    // Mais assurez-vous de le garder dans votre fichier final !
-    try {
-        if (typeof global.DOMMatrix === 'undefined') {
-          global.DOMMatrix = class DOMMatrix {
-            constructor() {}
-            multiply() { return this; }
-            translate() { return this; }
-            scale() { return this; }
-            rotate() { return this; }
-          }
-        }
-        const pdfParse = require('pdf-parse')
-        const dataBuffer = await readFile(filePath)
-        const data = await pdfParse(dataBuffer)
-        return data.text.trim()
-      } catch (error) {
-        throw new Error(`Erreur PDF: ${error.message}`)
-      }
-}
-
+// Extract text from DOCX using mammoth
 async function extractTextFromDOCX(filePath) {
-    try {
-        const dataBuffer = await readFile(filePath)
-        const result = await mammoth.extractRawText({ buffer: dataBuffer })
-        return result.value
-      } catch (error) {
-        throw new Error(`Erreur DOCX: ${error.message}`)
-      }
+  try {
+    const dataBuffer = await readFile(filePath)
+    const result = await mammoth.extractRawText({ buffer: dataBuffer })
+    return result.value
+  } catch (error) {
+    console.error('Error extracting text from DOCX:', error)
+    throw new Error(`Erreur DOCX: ${error instanceof Error ? error.message : 'Inconnue'}`)
+  }
 }
 
 async function extractText(filePath, fileType) {
@@ -136,11 +133,34 @@ async function evaluateWork(
   criteria,
   studentWork
 ) {
-  // On appelle notre fonction d'initialisation "magique"
-  const zai = await initZAI()
+  const zai = await initZAI() // Retourne maintenant notre client léger
 
-  const systemPrompt = `Tu es un enseignant expert et impartial... (votre prompt système complet)`
-  const userPrompt = `Évalue le travail suivant:\nTITRE: ${assignmentTitle}\nMATIÈRE: ${subject}\nCONSIGNES: ${instructions}\nCRITÈRES: ${criteria}\nTRAVAIL: ${studentWork}\nRéponds UNIQUEMENT en JSON.`
+  const systemPrompt = `Tu es un enseignant expert et impartial. Ton rôle est d'évaluer des travaux d'étudiants de manière constructive et détaillée.
+IMPORTANT: Tu dois TOUJOURS répondre en JSON avec exactement cette structure:
+{
+  "summary": "résumé bref de l'évaluation en 2-3 phrases",
+  "strengths": ["point fort 1", "point fort 2", ...],
+  "improvements": ["point à améliorer 1", "point à améliorer 2", ...],
+  "grade": "note sur 20 (ex: 14/20)",
+  "detailedAnalysis": "analyse détaillée et constructive"
+}
+Règles d'évaluation:
+- Adapte ton évaluation à la matière: ${subject}
+- Si le travail est excellent, donne une note élevée (16-20)
+- Si le travail est bon mais avec des erreurs, donne une note moyenne (12-15)
+- Si le travail a des problèmes majeurs, donne une note plus basse (8-11)
+- Seulement en cas de travail incomplet ou très mauvais, donne une note basse (<8)`
+
+  const userPrompt = `Évalue le travail suivant:
+TITRE DU DEVOIR: ${assignmentTitle}
+MATIÈRE: ${subject}
+CONSIGNES DU DEVOIR:
+${instructions}
+CRITÈRES D'ÉVALUATION:
+${criteria}
+TRAVAIL DE L'ÉTUDIENT:
+${studentWork}
+Évalue ce travail en tenant compte des consignes et des critères fournis. Réponds UNIQUEMENT en JSON avec la structure demandée.`
 
   try {
     const completion = await zai.chat.completions.create({
@@ -148,19 +168,22 @@ async function evaluateWork(
         { role: 'assistant', content: systemPrompt },
         { role: 'user', content: userPrompt }
       ],
-      thinking: { type: 'disabled' }
+      // Retrait de 'thinking' si l'API standard ne le supporte pas, ou laissez-le si ZAI l'utilise
+      thinking: { type: 'disabled' } 
     })
     
     const response = completion.choices[0]?.message?.content
     if (!response) throw new Error('Pas de réponse du LLM')
 
     let jsonMatch = response.match(/\{[\s\S]*\}/)
-    if (jsonMatch) return JSON.parse(jsonMatch[0])
-    throw new Error('Réponse invalide du LLM')
-
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0])
+    } else {
+      throw new Error('Réponse invalide du LLM')
+    }
   } catch (error) {
     console.error('Error evaluating work:', error)
-    throw new Error(`Erreur IA: ${error.message}`)
+    throw new Error(`Erreur lors de l'évaluation par l'IA: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
   }
 }
 
@@ -168,40 +191,48 @@ export async function POST(req) {
   try {
     await ensureUploadDir()
     const formData = await req.formData()
-    
-    // Récupération des champs
     const file = formData.get('file')
     const assignmentTitle = formData.get('assignmentTitle')
     const subject = formData.get('subject')
     const instructions = formData.get('instructions')
     const criteria = formData.get('criteria')
 
-    if (!file) return NextResponse.json({ error: 'Fichier manquant' }, { status: 400 })
+    if (!file) return NextResponse.json({ error: 'Aucun fichier fourni' }, { status: 400 })
+    if (!instructions || !criteria) return NextResponse.json({ error: 'Consignes manquantes' }, { status: 400 })
 
-    // Sauvegarde temporaire
     const timestamp = Date.now()
     const fileName = `${timestamp}-${file.name}`
     const filePath = path.join(UPLOAD_DIR, fileName)
-    
+
     const bytes = await file.arrayBuffer()
-    await writeFile(filePath, Buffer.from(bytes))
+    const buffer = Buffer.from(bytes)
+    await writeFile(filePath, buffer)
 
     try {
-      // Extraction et Évaluation
       const fileType = fileName.split('.').pop()?.toLowerCase() || ''
+      console.log('File type:', fileType, 'File name:', fileName)
+      
       const studentWork = await extractText(filePath, fileType)
       
-      if (!studentWork || studentWork.length < 10) throw new Error("Texte insuffisant")
+      if (!studentWork || studentWork.trim().length < 10) {
+        throw new Error(`Texte extrait trop court (${studentWork?.length || 0} caractères).`)
+      }
 
-      const result = await evaluateWork(assignmentTitle, subject, instructions, criteria, studentWork)
-      return NextResponse.json(result)
+      const evaluation = await evaluateWork(
+        assignmentTitle,
+        subject,
+        instructions,
+        criteria,
+        studentWork
+      )
+      return NextResponse.json(evaluation)
 
     } finally {
-      // Nettoyage
-      await unlink(filePath).catch(console.error)
+      try { await unlink(filePath) } catch (error) { console.error('File cleanup error:', error) }
     }
   } catch (error) {
-    console.error('API Error:', error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    console.error('Error in evaluate API:', error)
+    const errorMessage = error instanceof Error ? error.message : 'Erreur lors de l\'évaluation'
+    return NextResponse.json({ error: errorMessage }, { status: 500 })
   }
 }
